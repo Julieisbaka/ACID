@@ -5,7 +5,6 @@
       "model": "YOUR-BENCHMARK-MODEL-ID",
       "reasoning_effort": null,
       "base_url": null,
-      "api_key_env": "OPENAI_API_KEY",
       "http_referer": null,
       "app_title": "ACID Benchmark"
     }
@@ -15,7 +14,6 @@
     "model": "gpt-5.6-luna",
     "reasoning_effort": "low",
     "base_url": null,
-    "api_key_env": "OPENAI_API_KEY",
     "http_referer": null,
     "app_title": "ACID Benchmark Judge"
   }

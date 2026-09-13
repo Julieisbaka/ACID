@@ -4,12 +4,30 @@
   "title": "ACID Benchmark Questions",
   "description": "Canonical question records. Difficulty is reserved for future analytical versions and is intentionally absent from this schema.",
   "type": "object",
-  "required": ["id", "domain", "question", "answer"],
+  "required": [
+    "id",
+    "domain",
+    "question",
+    "answer"
+  ],
   "additionalProperties": false,
   "properties": {
-    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
-    "domain": { "enum": ["ACID-Math", "ACID-Chem", "ACID-Bio", "ACID-Code"] },
-    "question": { "type": "string", "minLength": 1 },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "domain": {
+      "enum": [
+        "ACID-Math",
+        "ACID-Chem",
+        "ACID-Bio",
+        "ACID-Code"
+      ]
+    },
+    "question": {
+      "type": "string",
+      "minLength": 1
+    },
     "answer": {}
   }
 }

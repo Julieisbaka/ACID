@@ -17,7 +17,7 @@ from typing import Any, Mapping, Sequence, cast
 
 import tiktoken
 from openai import AsyncOpenAI
-from openai.types.chat import ChatCompletionMessageParam
+from openai.types.chat import ChatCompletion, ChatCompletionMessageParam
 
 from metrics import DOMAIN_TAGS, calculate_metrics, write_summary_csv
 
@@ -69,7 +69,6 @@ class ModelSpec:
     model: str
     reasoning_effort: str | None = None
     base_url: str | None = None
-    api_key_env: str = "OPENAI_API_KEY"
     http_referer: str | None = None
     app_title: str | None = None
 
@@ -311,8 +310,12 @@ class AcidRunner:
                 }
                 if reasoning_effort is not None:
                     request_options["reasoning_effort"] = reasoning_effort
-                response = await client.chat.completions.create(**request_options)
-                usage = response.usage.model_dump() if response.usage else {}
+                response = cast(ChatCompletion, await client.chat.completions.create(**request_options))
+                usage: dict[str, Any] = (
+                    response.usage.model_dump()
+                    if response.usage
+                    else {}
+                )
                 return response.choices[0].message.content or "", usage, attempt + 1, time.perf_counter() - started
             except Exception as exc:
                 last_error = exc
@@ -389,11 +392,22 @@ def _parse_int_list(value: str) -> list[int]:
         raise argparse.ArgumentTypeError("expected comma-separated integers") from exc
 
 
+def _provider_api_key_env(provider: str) -> str:
+    """Return the conventional environment variable for a provider credential."""
+    normalized = re.sub(r"[^A-Za-z0-9]", "_", provider).upper()
+    known = {
+        "OPENAI": "OPENAI_API_KEY",
+        "OPENROUTER": "OPENROUTER_API_KEY",
+    }
+    return known.get(normalized, f"{normalized}_API_KEY")
+
+
 def _make_client(spec: ModelSpec, env_file: Path) -> AsyncOpenAI:
     load_dotenv(env_file)
-    api_key = os.getenv(spec.api_key_env)
+    api_key_env = _provider_api_key_env(spec.provider)
+    api_key = os.getenv(api_key_env)
     if not api_key:
-        raise RuntimeError(f"Set {spec.api_key_env} for {spec.key}")
+        raise RuntimeError(f"Set {api_key_env} in {env_file} for {spec.key}")
     headers: dict[str, str] = {}
     if spec.http_referer:
         headers["HTTP-Referer"] = spec.http_referer
