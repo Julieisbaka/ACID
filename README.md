@@ -21,8 +21,11 @@ The scores are farther broken down into domain specific subscores, allowing for 
 The current subscore domains consist of:
 
 ACID-Math: Mathematics and physics.
+
 ACID-Bio: Biology and life sciences.
+
 ACID-Code: Programming and software development.
+
 ACID-Chem: Chemistry.
 
 ## Goals
