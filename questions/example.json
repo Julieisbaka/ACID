@@ -1,0 +1,30 @@
+[
+  {
+    "id": "math-kinematics-001",
+    "domain": "ACID-Math",
+    "question": "A cart starts from rest and accelerates at 3 m/s^2 for 4 s. It then travels at the resulting constant speed for 5 s. How many metres does it travel in total?",
+    "answer": 84,
+    "metadata": { "topic": "multi-stage kinematics", "difficulty": "introductory" }
+  },
+  {
+    "id": "chem-stoichiometry-001",
+    "domain": "ACID-Chem",
+    "question": "For 2 H2 + O2 -> 2 H2O, assuming oxygen is in excess, how many moles of water form from 3.5 moles of H2 at 100% yield?",
+    "answer": 3.5,
+    "metadata": { "topic": "stoichiometry", "difficulty": "introductory" }
+  },
+  {
+    "id": "bio-genetics-001",
+    "domain": "ACID-Bio",
+    "question": "In a test cross AaBb x aabb with independent assortment, what fraction of offspring are expected to have genotype aabb? Return the fraction in simplest form.",
+    "answer": "1/4",
+    "metadata": { "topic": "dihybrid test cross", "difficulty": "introductory" }
+  },
+  {
+    "id": "code-scope-001",
+    "domain": "ACID-Code",
+    "question": "What exact list is printed by this Python code?\n\nvalues = []\nfor i in range(3):\n    values.append(lambda i=i: i * 2)\nprint([f() for f in values])",
+    "answer": "[0, 2, 4]",
+    "metadata": { "language": "python", "topic": "closure binding", "difficulty": "introductory" }
+  }
+]

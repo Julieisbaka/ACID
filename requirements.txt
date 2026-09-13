@@ -1,0 +1,2 @@
+openai>=1.40,<3
+tiktoken>=0.7,<1

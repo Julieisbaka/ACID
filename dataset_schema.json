@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acid-benchmark.org/schemas/questions-v1.json",
+  "title": "ACID Benchmark Questions",
+  "description": "Canonical question records. The benchmark model receives question only; the scoring model receives all three fields.",
+  "type": "object",
+  "required": ["id", "domain", "question", "answer"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "domain": { "enum": ["ACID-Math", "ACID-Chem", "ACID-Bio", "ACID-Code"] },
+    "question": { "type": "string", "minLength": 1 },
+    "answer": {},
+    "metadata": { "type": "object", "additionalProperties": true }
+  }
+}

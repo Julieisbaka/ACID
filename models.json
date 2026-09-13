@@ -1,0 +1,18 @@
+{
+  "models": [
+    {
+      "id": "YOUR-BENCHMARK-MODEL-ID",
+      "base_url": null,
+      "api_key_env": "OPENAI_API_KEY",
+      "http_referer": null,
+      "app_title": "ACID Benchmark"
+    }
+  ],
+  "scoring_model": {
+    "id": "YOUR-SCORING-MODEL-ID",
+    "base_url": null,
+    "api_key_env": "OPENAI_API_KEY",
+    "http_referer": null,
+    "app_title": "ACID Benchmark Judge"
+  }
+}
