@@ -81,7 +81,9 @@ The active fields are only `id`, `domain`, `question`, and `answer`. Difficulty 
 
 ### Adding models
 
-Add benchmark models to `models.json` or pass `provider/model` references with `--models`. Each registry entry stores provider and model separately and can select its own OpenAI-compatible `base_url`. The registry stores only the name of the environment variable (`api_key_env`), never the API key itself; put the secret in `.env`. ACID defaults to the single `openai/gpt-5.6-luna-low` judge with standardized `acid-judge-v1` instructions, temperature `0`, and a 256-token response cap. Keep that default unchanged for academically comparable results. The optional `--scoring-model` flag is intended only for explicitly non-comparable experiments.
+Add benchmark models to `models.json` or pass `provider/model` references with `--models`. Each registry entry stores provider, model, and optional `reasoning_effort` separately. Supported reasoning levels are `low`, `medium`, and `high`; unset omits the provider parameter. The registry stores only the name of the environment variable (`api_key_env`), never the API key itself; put the secret in `.env`. ACID defaults to `openai/gpt-5.6-luna` with `reasoning_effort: low`, standardized `acid-judge-v1` instructions, temperature `0`, and a 256-token response cap. Reasoning effort is recorded and included in metric grouping so different levels cannot be combined statistically. Keep the default judge settings unchanged for academically comparable results. The optional `--scoring-model` and `--judge-reasoning-effort` flags are intended only for explicitly non-comparable experiments.
+
+Use `--reasoning-effort low|medium|high` to override all benchmark models for a run, or `--judge-reasoning-effort low|medium|high` to override only the judge. Prefer registry configuration for published evaluations.
 
 ### Dry run
 

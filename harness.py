@@ -10,7 +10,7 @@ import os
 import random
 import re
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence, cast
@@ -23,7 +23,9 @@ from metrics import DOMAIN_TAGS, calculate_metrics, write_summary_csv
 
 DEFAULT_TIERS = (8_000, 32_000, 128_000, 512_000)
 DEFAULT_JUDGE_PROVIDER = "openai"
-DEFAULT_JUDGE_MODEL = "gpt-5.6-luna-low"
+DEFAULT_JUDGE_MODEL = "gpt-5.6-luna"
+DEFAULT_JUDGE_REASONING_EFFORT = "low"
+REASONING_EFFORTS = frozenset({"low", "medium", "high"})
 JUDGE_INSTRUCTIONS_VERSION = "acid-judge-v1"
 JUDGE_TEMPERATURE = 0.0
 JUDGE_MAX_TOKENS = 256
@@ -65,10 +67,18 @@ class ModelSpec:
 
     provider: str
     model: str
+    reasoning_effort: str | None = None
     base_url: str | None = None
     api_key_env: str = "OPENAI_API_KEY"
     http_referer: str | None = None
     app_title: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.provider.strip() or not self.model.strip():
+            raise ValueError("Model provider and model must be non-empty")
+        if self.reasoning_effort is not None and self.reasoning_effort not in REASONING_EFFORTS:
+            allowed = ", ".join(sorted(REASONING_EFFORTS))
+            raise ValueError(f"reasoning_effort must be one of: {allowed}")
 
     @property
     def key(self) -> str:
@@ -179,14 +189,26 @@ def load_model_specs(path: Path, requested_models: Sequence[str] | None) -> list
     return specs
 
 
-def load_scoring_spec(path: Path, requested_model: str | None, *, dry_run: bool) -> ModelSpec:
+def load_scoring_spec(
+    path: Path,
+    requested_model: str | None,
+    *,
+    dry_run: bool,
+    reasoning_effort: str | None = None,
+) -> ModelSpec:
     configured, registry_scoring = _load_registry(path)
     if requested_model:
         spec = _spec_from_json(requested_model)
-        return configured.get(spec.key, spec)
-    if registry_scoring is not None:
-        return registry_scoring
-    return ModelSpec(provider=DEFAULT_JUDGE_PROVIDER, model=DEFAULT_JUDGE_MODEL)
+        resolved = configured.get(spec.key, spec)
+    elif registry_scoring is not None:
+        resolved = registry_scoring
+    else:
+        resolved = ModelSpec(
+            provider=DEFAULT_JUDGE_PROVIDER,
+            model=DEFAULT_JUDGE_MODEL,
+            reasoning_effort=DEFAULT_JUDGE_REASONING_EFFORT,
+        )
+    return replace(resolved, reasoning_effort=reasoning_effort) if reasoning_effort is not None else resolved
 
 
 def load_noise(noise_dir: Path, requested_tiers: Sequence[int] | None) -> tuple[dict[int, str], str]:
@@ -261,8 +283,17 @@ class AcidRunner:
         self.config = config
         self.semaphore = asyncio.Semaphore(config.concurrency)
 
-    async def _request(self, client: AsyncOpenAI, model: str, content: str, *, system_prompt: str | None = None,
-                       temperature: float | None = None, max_tokens: int | None = None) -> tuple[str, dict[str, Any], int, float]:
+    async def _request(
+        self,
+        client: AsyncOpenAI,
+        model: str,
+        content: str,
+        *,
+        system_prompt: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
+    ) -> tuple[str, dict[str, Any], int, float]:
         last_error: Exception | None = None
         for attempt in range(self.config.retries + 1):
             started = time.perf_counter()
@@ -271,12 +302,16 @@ class AcidRunner:
                 if system_prompt:
                     messages.append(cast(ChatCompletionMessageParam, {"role": "system", "content": system_prompt}))
                 messages.append(cast(ChatCompletionMessageParam, {"role": "user", "content": content}))
-                response = await client.chat.completions.create(
-                    model=model, messages=messages,
-                    temperature=self.config.temperature if temperature is None else temperature,
-                    max_tokens=self.config.max_tokens if max_tokens is None else max_tokens,
-                    timeout=self.config.timeout,
-                )
+                request_options: dict[str, Any] = {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": self.config.temperature if temperature is None else temperature,
+                    "max_tokens": self.config.max_tokens if max_tokens is None else max_tokens,
+                    "timeout": self.config.timeout,
+                }
+                if reasoning_effort is not None:
+                    request_options["reasoning_effort"] = reasoning_effort
+                response = await client.chat.completions.create(**request_options)
                 usage = response.usage.model_dump() if response.usage else {}
                 return response.choices[0].message.content or "", usage, attempt + 1, time.perf_counter() - started
             except Exception as exc:
@@ -299,6 +334,7 @@ class AcidRunner:
             system_prompt=JUDGE_SYSTEM_PROMPT,
             temperature=JUDGE_TEMPERATURE,
             max_tokens=JUDGE_MAX_TOKENS,
+            reasoning_effort=self.scoring_model.reasoning_effort,
         )
         score, rationale = parse_judge_response(raw)
         return score, raw, usage, attempts, latency, rationale
@@ -306,7 +342,9 @@ class AcidRunner:
     async def _run_one(self, model: ModelSpec, item: Mapping[str, Any], tier: int, trial: int) -> dict[str, Any]:
         record: dict[str, Any] = {
             "provider": model.provider, "model": model.model,
+            "reasoning_effort": model.reasoning_effort,
             "scoring_provider": self.scoring_model.provider, "scoring_model": self.scoring_model.model,
+            "scoring_reasoning_effort": self.scoring_model.reasoning_effort,
             "item_id": item["id"],
             "domain": item["domain"], "tier_tokens": tier, "trial": trial, "status": "error",
             "score": 0.0, "response": None, "judge_response": None, "judge_rationale": None,
@@ -319,7 +357,10 @@ class AcidRunner:
                     response, usage, attempts, latency = f"<final>{_answer_text(item['answer'])}</final>", {}, 0, 0.0
                 else:
                     response, usage, attempts, latency = await self._request(
-                        self.model_clients[model.key], model.model, build_payload(self.noise_blocks[tier], item["question"])
+                        self.model_clients[model.key],
+                        model.model,
+                        build_payload(self.noise_blocks[tier], item["question"]),
+                        reasoning_effort=model.reasoning_effort,
                     )
                 score, judge_response, judge_usage, judge_attempts, judge_latency, rationale = await self._judge(item, response)
                 record.update({
@@ -365,7 +406,14 @@ async def async_main(args: argparse.Namespace) -> None:
     load_dotenv(args.env_file)
     items = load_dataset(args.dataset)
     models = load_model_specs(args.model_config, args.models)
-    scoring_model = load_scoring_spec(args.model_config, args.scoring_model, dry_run=args.dry_run)
+    if args.reasoning_effort is not None:
+        models = [replace(model, reasoning_effort=args.reasoning_effort) for model in models]
+    scoring_model = load_scoring_spec(
+        args.model_config,
+        args.scoring_model,
+        dry_run=args.dry_run,
+        reasoning_effort=args.judge_reasoning_effort,
+    )
     if args.dry_run:
         noise_blocks, encoding_name = (load_noise(args.noise_dir, args.tiers) if (args.noise_dir / "manifest.json").exists() else dry_noise_blocks(args.tiers))
         clients: dict[str, AsyncOpenAI] = {}
@@ -398,8 +446,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-config", type=Path, default=Path("models.json"), help="Editable model registry")
     parser.add_argument("--noise-dir", type=Path, default=Path("noise_cache"))
     parser.add_argument("--output-dir", type=Path, default=Path("results"))
-    parser.add_argument("--models", nargs="+", help="Benchmark model IDs; omit to use models.json")
-    parser.add_argument("--scoring-model", help="Optional non-comparable override; default is the standardized judge in models.json or gpt-5.6-luna-low")
+    parser.add_argument("--models", nargs="+", help="Benchmark provider/model references; omit to use models.json")
+    parser.add_argument("--reasoning-effort", choices=sorted(REASONING_EFFORTS), help="Override reasoning effort for all benchmark models")
+    parser.add_argument("--scoring-model", help="Optional non-comparable override; default is the standardized judge in models.json or gpt-5.6-luna")
+    parser.add_argument("--judge-reasoning-effort", choices=sorted(REASONING_EFFORTS), help="Override the judge reasoning effort")
     parser.add_argument("--dry-run", action="store_true", help="Run without constructing or calling any AI provider client")
     parser.add_argument("--tiers", type=_parse_int_list, help="Comma-separated subset; default: manifest tiers")
     parser.add_argument("--trials", type=int, default=1)
