@@ -77,11 +77,11 @@ Place one or more JSON files in `questions/`. The harness loads every `.json` fi
 }
 ```
 
-The active fields are `id`, `domain`, `question`, and `answer`. An optional `difficulty` field is reserved for future benchmark changes but is currently ignored. The benchmarked model receives only `question` after the static noise prefix. The scoring model receives `question`, `domain`, `answer`, and the benchmarked model response. It never receives the noise prefix.
+The active fields are only `id`, `domain`, `question`, and `answer`. Difficulty is intentionally absent and reserved for a future version that may measure degradation by difficulty. The benchmarked model receives only `question` after the static noise prefix. The scoring model receives `question`, `domain`, `answer`, and the benchmarked model response. It never receives the noise prefix.
 
 ### Adding models
 
-Add benchmark models to `models.json` or pass model IDs with `--models`. Each registry entry can select its own OpenAI-compatible `base_url` and API-key environment variable. ACID defaults to the single `gpt-4o-mini` judge with standardized `acid-judge-v1` instructions, temperature `0`, and a 256-token response cap. Keep that default unchanged for academically comparable results. The optional `--scoring-model` flag is intended only for explicitly non-comparable experiments.
+Add benchmark models to `models.json` or pass `provider/model` references with `--models`. Each registry entry stores provider and model separately and can select its own OpenAI-compatible `base_url`. The registry stores only the name of the environment variable (`api_key_env`), never the API key itself; put the secret in `.env`. ACID defaults to the single `openai/gpt-5.6-luna-low` judge with standardized `acid-judge-v1` instructions, temperature `0`, and a 256-token response cap. Keep that default unchanged for academically comparable results. The optional `--scoring-model` flag is intended only for explicitly non-comparable experiments.
 
 ### Dry run
 

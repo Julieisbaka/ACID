@@ -22,7 +22,8 @@ from openai.types.chat import ChatCompletionMessageParam
 from metrics import DOMAIN_TAGS, calculate_metrics, write_summary_csv
 
 DEFAULT_TIERS = (8_000, 32_000, 128_000, 512_000)
-DEFAULT_JUDGE_MODEL_ID = "gpt-4o-mini"
+DEFAULT_JUDGE_PROVIDER = "openai"
+DEFAULT_JUDGE_MODEL = "gpt-5.6-luna-low"
 JUDGE_INSTRUCTIONS_VERSION = "acid-judge-v1"
 JUDGE_TEMPERATURE = 0.0
 JUDGE_MAX_TOKENS = 256
@@ -62,11 +63,16 @@ CANDIDATE RESPONSE FROM THE BENCHMARKED MODEL:
 class ModelSpec:
     """An OpenAI-compatible model entry from models.json or the CLI."""
 
-    id: str
+    provider: str
+    model: str
     base_url: str | None = None
     api_key_env: str = "OPENAI_API_KEY"
     http_referer: str | None = None
     app_title: str | None = None
+
+    @property
+    def key(self) -> str:
+        return f"{self.provider}/{self.model}"
 
 
 @dataclass(frozen=True)
@@ -130,7 +136,7 @@ def validate_dataset(items: Any) -> None:
         missing = {"id", "domain", "question", "answer"} - item.keys()
         if missing:
             raise ValueError(f"Item {index} is missing: {', '.join(sorted(missing))}")
-        unexpected = set(item) - {"id", "domain", "question", "answer", "difficulty"}
+        unexpected = set(item) - {"id", "domain", "question", "answer"}
         if unexpected:
             raise ValueError(f"Item {index} has unsupported fields: {', '.join(sorted(unexpected))}")
         item_id = str(item["id"])
@@ -141,20 +147,18 @@ def validate_dataset(items: Any) -> None:
             raise ValueError(f"Unknown domain on {item_id}: {item['domain']}")
         if not isinstance(item["question"], str) or not item["question"].strip():
             raise ValueError(f"Empty question on {item_id}")
-        # Reserved for future benchmark analysis; intentionally unused for now.
-        if "difficulty" in item and not isinstance(item["difficulty"], str):
-            raise ValueError(f"Difficulty must be a string on {item_id}")
-
-
 def _spec_from_json(raw: str | Mapping[str, Any]) -> ModelSpec:
-    return ModelSpec(id=raw) if isinstance(raw, str) else ModelSpec(**raw)
+    if isinstance(raw, str):
+        provider, separator, model = raw.partition("/")
+        return ModelSpec(provider=provider if separator else DEFAULT_JUDGE_PROVIDER, model=model if separator else raw)
+    return ModelSpec(**raw)
 
 
 def _load_registry(path: Path) -> tuple[dict[str, ModelSpec], ModelSpec | None]:
     if not path.exists():
         return {}, None
     payload = json.loads(path.read_text(encoding="utf-8"))
-    models = {_spec_from_json(raw).id: _spec_from_json(raw) for raw in payload.get("models", [])}
+    models = {_spec_from_json(raw).key: _spec_from_json(raw) for raw in payload.get("models", [])}
     scoring = payload.get("scoring_model")
     return models, (_spec_from_json(scoring) if scoring is not None else None)
 
@@ -165,16 +169,24 @@ def load_model_specs(path: Path, requested_models: Sequence[str] | None) -> list
     ids = list(requested_models or configured)
     if not ids:
         raise ValueError("Add benchmark models to models.json or pass --models MODEL [MODEL ...]")
-    return [configured.get(model_id, ModelSpec(id=model_id)) for model_id in ids]
+    specs: list[ModelSpec] = []
+    for model_ref in ids:
+        if model_ref in configured:
+            specs.append(configured[model_ref])
+            continue
+        spec = _spec_from_json(model_ref)
+        specs.append(configured.get(spec.key, spec))
+    return specs
 
 
 def load_scoring_spec(path: Path, requested_model: str | None, *, dry_run: bool) -> ModelSpec:
     configured, registry_scoring = _load_registry(path)
     if requested_model:
-        return configured.get(requested_model, ModelSpec(id=requested_model))
+        spec = _spec_from_json(requested_model)
+        return configured.get(spec.key, spec)
     if registry_scoring is not None:
         return registry_scoring
-    return ModelSpec(id=DEFAULT_JUDGE_MODEL_ID)
+    return ModelSpec(provider=DEFAULT_JUDGE_PROVIDER, model=DEFAULT_JUDGE_MODEL)
 
 
 def load_noise(noise_dir: Path, requested_tiers: Sequence[int] | None) -> tuple[dict[int, str], str]:
@@ -282,7 +294,7 @@ class AcidRunner:
             raise RuntimeError("A scoring client is required outside dry-run mode")
         raw, usage, attempts, latency = await self._request(
             self.scoring_client,
-            self.scoring_model.id,
+            self.scoring_model.model,
             build_judge_payload(item, response),
             system_prompt=JUDGE_SYSTEM_PROMPT,
             temperature=JUDGE_TEMPERATURE,
@@ -293,7 +305,9 @@ class AcidRunner:
 
     async def _run_one(self, model: ModelSpec, item: Mapping[str, Any], tier: int, trial: int) -> dict[str, Any]:
         record: dict[str, Any] = {
-            "model": model.id, "scoring_model": self.scoring_model.id, "item_id": item["id"],
+            "provider": model.provider, "model": model.model,
+            "scoring_provider": self.scoring_model.provider, "scoring_model": self.scoring_model.model,
+            "item_id": item["id"],
             "domain": item["domain"], "tier_tokens": tier, "trial": trial, "status": "error",
             "score": 0.0, "response": None, "judge_response": None, "judge_rationale": None,
             "error": None, "usage": {}, "judge_usage": {}, "attempts": 0, "judge_attempts": 0,
@@ -305,7 +319,7 @@ class AcidRunner:
                     response, usage, attempts, latency = f"<final>{_answer_text(item['answer'])}</final>", {}, 0, 0.0
                 else:
                     response, usage, attempts, latency = await self._request(
-                        self.model_clients[model.id], model.id, build_payload(self.noise_blocks[tier], item["question"])
+                        self.model_clients[model.key], model.model, build_payload(self.noise_blocks[tier], item["question"])
                     )
                 score, judge_response, judge_usage, judge_attempts, judge_latency, rationale = await self._judge(item, response)
                 record.update({
@@ -338,7 +352,7 @@ def _make_client(spec: ModelSpec, env_file: Path) -> AsyncOpenAI:
     load_dotenv(env_file)
     api_key = os.getenv(spec.api_key_env)
     if not api_key:
-        raise RuntimeError(f"Set {spec.api_key_env} for model {spec.id}")
+        raise RuntimeError(f"Set {spec.api_key_env} for {spec.key}")
     headers: dict[str, str] = {}
     if spec.http_referer:
         headers["HTTP-Referer"] = spec.http_referer
@@ -358,7 +372,7 @@ async def async_main(args: argparse.Namespace) -> None:
         scoring_client = None
     else:
         noise_blocks, encoding_name = load_noise(args.noise_dir, args.tiers)
-        clients = {model.id: _make_client(model, args.env_file) for model in models}
+        clients = {model.key: _make_client(model, args.env_file) for model in models}
         scoring_client = _make_client(scoring_model, args.env_file)
     config = RunConfig(args.trials, args.concurrency, args.max_tokens, args.temperature, args.timeout, args.retries, args.dry_run)
     records = await AcidRunner(clients, models, scoring_client, scoring_model, items, noise_blocks, config).run()
@@ -385,7 +399,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--noise-dir", type=Path, default=Path("noise_cache"))
     parser.add_argument("--output-dir", type=Path, default=Path("results"))
     parser.add_argument("--models", nargs="+", help="Benchmark model IDs; omit to use models.json")
-    parser.add_argument("--scoring-model", help="Optional non-comparable override; default is the standardized judge in models.json or gpt-4o-mini")
+    parser.add_argument("--scoring-model", help="Optional non-comparable override; default is the standardized judge in models.json or gpt-5.6-luna-low")
     parser.add_argument("--dry-run", action="store_true", help="Run without constructing or calling any AI provider client")
     parser.add_argument("--tiers", type=_parse_int_list, help="Comma-separated subset; default: manifest tiers")
     parser.add_argument("--trials", type=int, default=1)

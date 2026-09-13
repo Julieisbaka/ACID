@@ -1,7 +1,8 @@
 {
   "models": [
     {
-      "id": "YOUR-BENCHMARK-MODEL-ID",
+      "provider": "openai",
+      "model": "YOUR-BENCHMARK-MODEL-ID",
       "base_url": null,
       "api_key_env": "OPENAI_API_KEY",
       "http_referer": null,
@@ -9,7 +10,8 @@
     }
   ],
   "scoring_model": {
-    "id": "gpt-4o-mini",
+    "provider": "openai",
+    "model": "gpt-5.6-luna-low",
     "base_url": null,
     "api_key_env": "OPENAI_API_KEY",
     "http_referer": null,

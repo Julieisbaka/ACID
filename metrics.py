@@ -122,14 +122,24 @@ def calculate_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     Ratios are null when that baseline is zero; those observations are excluded from
     ratio means while their scores remain present in mean-score calculations.
     """
-    baselines: dict[tuple[str, str, int], float] = {}
+    baselines: dict[tuple[str, str, str, int], float] = {}
     for row in records:
         if int(row["tier_tokens"]) == 0:
-            key = (str(row["model"]), str(row["item_id"]), int(row["trial"]))
+            key = (
+                str(row.get("provider", "unknown")),
+                str(row["model"]),
+                str(row["item_id"]),
+                int(row["trial"]),
+            )
             baselines[key] = float(row["score"])
 
     for row in records:
-        key = (str(row["model"]), str(row["item_id"]), int(row["trial"]))
+        key = (
+            str(row.get("provider", "unknown")),
+            str(row["model"]),
+            str(row["item_id"]),
+            int(row["trial"]),
+        )
         baseline = baselines.get(key)
         row["baseline_score"] = baseline
         if int(row["tier_tokens"]) == 0:
@@ -141,12 +151,13 @@ def calculate_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
                 else None
             )
 
-    grouped: dict[tuple[str, str, int], list[dict[str, Any]]] = defaultdict(list)
-    overall: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
+    grouped: dict[tuple[str, str, str, int], list[dict[str, Any]]] = defaultdict(list)
+    overall: dict[tuple[str, str, int], list[dict[str, Any]]] = defaultdict(list)
     for row in records:
         tier = int(row["tier_tokens"])
-        grouped[(str(row["model"]), str(row["domain"]), tier)].append(row)
-        overall[(str(row["model"]), tier)].append(row)
+        provider = str(row.get("provider", "unknown"))
+        grouped[(provider, str(row["model"]), str(row["domain"]), tier)].append(row)
+        overall[(provider, str(row["model"]), tier)].append(row)
 
     def summarise(
         key: tuple[Any, ...], rows: list[dict[str, Any]], domain: str
@@ -158,7 +169,8 @@ def calculate_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
         ]
         scores = [float(row["score"]) for row in rows]
         return {
-            "model": str(key[0]),
+            "provider": str(key[0]),
+            "model": str(key[1]),
             "domain": domain,
             "tier_tokens": int(key[-1]),
             "tier_label": _tier_label(int(key[-1])),
@@ -169,23 +181,24 @@ def calculate_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
             "errors": sum(row.get("status") != "ok" for row in rows),
         }
 
-    domain_rows = [
-        summarise(key, rows, key[1]) for key, rows in sorted(grouped.items())
-    ]
+    domain_rows = [summarise(key, rows, key[2]) for key, rows in sorted(grouped.items())]
     overall_rows = [
         summarise(key, rows, "ALL") for key, rows in sorted(overall.items())
     ]
 
     compliance: list[dict[str, Any]] = []
-    models = sorted({str(row["model"]) for row in records})
-    for model in models:
+    models = sorted({(str(row.get("provider", "unknown")), str(row["model"])) for row in records})
+    for provider, model in models:
         model_rows = [
             row
             for row in overall_rows
-            if row["model"] == model and int(row["tier_tokens"]) > 0
+            if row["provider"] == provider
+            and row["model"] == model
+            and int(row["tier_tokens"]) > 0
         ]
         compliance.append(
             {
+                "provider": provider,
                 "model": model,
                 "domain": "ALL",
                 "ACID80": _compliance(model_rows, 0.80),
@@ -196,13 +209,15 @@ def calculate_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
             rows = [
                 row
                 for row in domain_rows
-                if row["model"] == model
+                if row["provider"] == provider
+                and row["model"] == model
                 and row["domain"] == domain
                 and int(row["tier_tokens"]) > 0
             ]
             if rows:
                 compliance.append(
                     {
+                        "provider": provider,
                         "model": model,
                         "domain": domain,
                         "ACID80": _compliance(rows, 0.80),
@@ -222,12 +237,14 @@ def calculate_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
 def write_summary_csv(metrics: Mapping[str, Any], path: Path) -> None:
     """Write overall and domain summaries in one graph-ready long-form CSV."""
     compliance_lookup = {
-        (row["model"], row["domain"]): row for row in metrics.get("compliance", [])
+        (row["provider"], row["model"], row["domain"]): row
+        for row in metrics.get("compliance", [])
     }
     rows = list(metrics.get("tier_summary", [])) + list(
         metrics.get("domain_summary", [])
     )
     fieldnames = [
+        "provider",
         "model",
         "domain",
         "tier_tokens",
@@ -247,7 +264,9 @@ def write_summary_csv(metrics: Mapping[str, Any], path: Path) -> None:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for row in rows:
-            compliance = compliance_lookup.get((row["model"], row["domain"]), {})
+            compliance = compliance_lookup.get(
+                (row["provider"], row["model"], row["domain"]), {}
+            )
             writer.writerow(
                 {
                     **row,

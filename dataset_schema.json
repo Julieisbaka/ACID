@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://acid-benchmark.org/schemas/questions-v1.json",
   "title": "ACID Benchmark Questions",
-  "description": "Canonical question records. Difficulty is reserved for future use and currently ignored.",
+  "description": "Canonical question records. Difficulty is reserved for future analytical versions and is intentionally absent from this schema.",
   "type": "object",
   "required": ["id", "domain", "question", "answer"],
   "additionalProperties": false,
@@ -10,10 +10,6 @@
     "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
     "domain": { "enum": ["ACID-Math", "ACID-Chem", "ACID-Bio", "ACID-Code"] },
     "question": { "type": "string", "minLength": 1 },
-    "answer": {},
-    "difficulty": {
-      "type": "string",
-      "description": "Reserved for future benchmark analysis; currently unused."
-    }
+    "answer": {}
   }
 }
