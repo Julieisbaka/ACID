@@ -1,4 +1,5 @@
 {
+  "$schema": "./models_schema.json",
   "models": [
     {
       "provider": "openai",
