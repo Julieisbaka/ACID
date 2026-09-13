@@ -13,14 +13,19 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence, cast
 
 import tiktoken
 from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletionMessageParam
 
 from metrics import DOMAIN_TAGS, calculate_metrics, write_summary_csv
 
 DEFAULT_TIERS = (8_000, 32_000, 128_000, 512_000)
+DEFAULT_JUDGE_MODEL_ID = "gpt-4o-mini"
+JUDGE_INSTRUCTIONS_VERSION = "acid-judge-v1"
+JUDGE_TEMPERATURE = 0.0
+JUDGE_MAX_TOKENS = 256
 
 ANCHOR = """
 
@@ -33,11 +38,17 @@ reasoning that is useful, then place only the requested final answer between
 ========== END TARGET TASK ==========
 """
 
-JUDGE_PROMPT = """You are the scoring model for the ACID reasoning benchmark.
-Score the candidate response against the supplied reference answer. Score factual
-and logical correctness, not style. Return only JSON in this exact shape:
-{{"score": 0.0, "rationale": "brief explanation"}}
-The score must be between 0.0 (incorrect) and 1.0 (fully correct).
+JUDGE_SYSTEM_PROMPT = """You are the standardized ACID scoring model. Follow this rubric exactly.
+1. Judge only whether the candidate answers the supplied question correctly.
+2. Compare against the supplied reference answer; do not invent missing facts.
+3. Treat equivalent wording, numeric forms, units, and valid code outputs as correct.
+4. Ignore verbosity, formatting, and style unless they make the answer incorrect.
+5. Use 1.0 for fully correct, 0.0 for fully incorrect, and a value between them only
+    when the response contains meaningful partial correctness.
+6. Return only JSON in this exact shape: {"score": 0.0, "rationale": "brief explanation"}.
+The score must be a number from 0.0 to 1.0."""
+
+JUDGE_PROMPT = """Evaluate this candidate response using the standardized ACID rubric.
 
 COMPLETE QUESTION ITEM (there is deliberately no injected noise here):
 {item}
@@ -81,16 +92,17 @@ def load_dotenv(path: Path = Path(".env")) -> None:
 
 
 def _read_question_file(path: Path) -> list[dict[str, Any]]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload: Any = json.loads(path.read_text(encoding="utf-8"))
+    raw_items: list[Any]
     if isinstance(payload, list):
-        items = payload
-    elif isinstance(payload, dict) and isinstance(payload.get("items"), list):
-        items = payload["items"]
+        raw_items = cast(list[Any], payload)
+    elif isinstance(payload, dict) and isinstance(cast(dict[str, Any], payload).get("items"), list):
+        raw_items = cast(list[Any], cast(dict[str, Any], payload)["items"])
     else:
-        items = [payload]
-    if not all(isinstance(item, dict) for item in items):
+        raw_items = [payload]
+    if not all(isinstance(item, dict) for item in raw_items):
         raise ValueError(f"Every item in {path} must be an object")
-    return [dict(item, source_file=str(path)) for item in items]
+    return [dict(cast(dict[str, Any], item)) for item in raw_items]
 
 
 def load_dataset(path: Path) -> list[dict[str, Any]]:
@@ -109,13 +121,18 @@ def load_dataset(path: Path) -> list[dict[str, Any]]:
 def validate_dataset(items: Any) -> None:
     if not isinstance(items, list) or not items:
         raise ValueError("Question set must contain at least one item")
+    raw_items = cast(list[Any], items)
+    if not all(isinstance(item, dict) for item in raw_items):
+        raise ValueError("Every question item must be an object")
+    typed_items = cast(list[dict[str, Any]], raw_items)
     seen: set[str] = set()
-    for index, item in enumerate(items):
-        if not isinstance(item, dict):
-            raise ValueError(f"Item {index} must be an object")
+    for index, item in enumerate(typed_items):
         missing = {"id", "domain", "question", "answer"} - item.keys()
         if missing:
             raise ValueError(f"Item {index} is missing: {', '.join(sorted(missing))}")
+        unexpected = set(item) - {"id", "domain", "question", "answer", "difficulty"}
+        if unexpected:
+            raise ValueError(f"Item {index} has unsupported fields: {', '.join(sorted(unexpected))}")
         item_id = str(item["id"])
         if item_id in seen:
             raise ValueError(f"Duplicate item id: {item_id}")
@@ -124,6 +141,9 @@ def validate_dataset(items: Any) -> None:
             raise ValueError(f"Unknown domain on {item_id}: {item['domain']}")
         if not isinstance(item["question"], str) or not item["question"].strip():
             raise ValueError(f"Empty question on {item_id}")
+        # Reserved for future benchmark analysis; intentionally unused for now.
+        if "difficulty" in item and not isinstance(item["difficulty"], str):
+            raise ValueError(f"Difficulty must be a string on {item_id}")
 
 
 def _spec_from_json(raw: str | Mapping[str, Any]) -> ModelSpec:
@@ -154,9 +174,7 @@ def load_scoring_spec(path: Path, requested_model: str | None, *, dry_run: bool)
         return configured.get(requested_model, ModelSpec(id=requested_model))
     if registry_scoring is not None:
         return registry_scoring
-    if dry_run:
-        return ModelSpec(id="dry-run-judge")
-    raise ValueError("Set --scoring-model or add scoring_model to models.json")
+    return ModelSpec(id=DEFAULT_JUDGE_MODEL_ID)
 
 
 def load_noise(noise_dir: Path, requested_tiers: Sequence[int] | None) -> tuple[dict[int, str], str]:
@@ -231,14 +249,20 @@ class AcidRunner:
         self.config = config
         self.semaphore = asyncio.Semaphore(config.concurrency)
 
-    async def _request(self, client: AsyncOpenAI, model: str, content: str) -> tuple[str, dict[str, Any], int, float]:
+    async def _request(self, client: AsyncOpenAI, model: str, content: str, *, system_prompt: str | None = None,
+                       temperature: float | None = None, max_tokens: int | None = None) -> tuple[str, dict[str, Any], int, float]:
         last_error: Exception | None = None
         for attempt in range(self.config.retries + 1):
             started = time.perf_counter()
             try:
+                messages: list[ChatCompletionMessageParam] = []
+                if system_prompt:
+                    messages.append(cast(ChatCompletionMessageParam, {"role": "system", "content": system_prompt}))
+                messages.append(cast(ChatCompletionMessageParam, {"role": "user", "content": content}))
                 response = await client.chat.completions.create(
-                    model=model, messages=[{"role": "user", "content": content}],
-                    temperature=self.config.temperature, max_tokens=self.config.max_tokens,
+                    model=model, messages=messages,
+                    temperature=self.config.temperature if temperature is None else temperature,
+                    max_tokens=self.config.max_tokens if max_tokens is None else max_tokens,
                     timeout=self.config.timeout,
                 )
                 usage = response.usage.model_dump() if response.usage else {}
@@ -256,7 +280,14 @@ class AcidRunner:
             return 1.0, '{"score": 1.0, "rationale": "dry run"}', {}, 0, 0.0, "dry run"
         if self.scoring_client is None:
             raise RuntimeError("A scoring client is required outside dry-run mode")
-        raw, usage, attempts, latency = await self._request(self.scoring_client, self.scoring_model.id, build_judge_payload(item, response))
+        raw, usage, attempts, latency = await self._request(
+            self.scoring_client,
+            self.scoring_model.id,
+            build_judge_payload(item, response),
+            system_prompt=JUDGE_SYSTEM_PROMPT,
+            temperature=JUDGE_TEMPERATURE,
+            max_tokens=JUDGE_MAX_TOKENS,
+        )
         score, rationale = parse_judge_response(raw)
         return score, raw, usage, attempts, latency, rationale
 
@@ -308,7 +339,7 @@ def _make_client(spec: ModelSpec, env_file: Path) -> AsyncOpenAI:
     api_key = os.getenv(spec.api_key_env)
     if not api_key:
         raise RuntimeError(f"Set {spec.api_key_env} for model {spec.id}")
-    headers = {}
+    headers: dict[str, str] = {}
     if spec.http_referer:
         headers["HTTP-Referer"] = spec.http_referer
     if spec.app_title:
@@ -333,10 +364,12 @@ async def async_main(args: argparse.Namespace) -> None:
     records = await AcidRunner(clients, models, scoring_client, scoring_model, items, noise_blocks, config).run()
     metrics = calculate_metrics(records)
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    payload = {
+    payload: dict[str, Any] = {
         "benchmark": "ACID", "format_version": 2, "created_at": datetime.now(timezone.utc).isoformat(),
         "configuration": {"models": [asdict(model) for model in models], "scoring_model": asdict(scoring_model),
-                          "tiers": sorted(noise_blocks), "trials": args.trials, "encoding": encoding_name, "dry_run": args.dry_run},
+                  "judge_instructions_version": JUDGE_INSTRUCTIONS_VERSION,
+                  "judge_temperature": JUDGE_TEMPERATURE, "judge_max_tokens": JUDGE_MAX_TOKENS,
+                  "tiers": sorted(noise_blocks), "trials": args.trials, "encoding": encoding_name, "dry_run": args.dry_run},
         "records": records, "metrics": metrics,
     }
     result_path = args.output_dir / "results.json"
@@ -352,7 +385,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--noise-dir", type=Path, default=Path("noise_cache"))
     parser.add_argument("--output-dir", type=Path, default=Path("results"))
     parser.add_argument("--models", nargs="+", help="Benchmark model IDs; omit to use models.json")
-    parser.add_argument("--scoring-model", help="Judge model ID; omit to use models.json")
+    parser.add_argument("--scoring-model", help="Optional non-comparable override; default is the standardized judge in models.json or gpt-4o-mini")
     parser.add_argument("--dry-run", action="store_true", help="Run without constructing or calling any AI provider client")
     parser.add_argument("--tiers", type=_parse_int_list, help="Comma-separated subset; default: manifest tiers")
     parser.add_argument("--trials", type=int, default=1)

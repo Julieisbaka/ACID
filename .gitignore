@@ -1,3 +1,6 @@
+# Generated stuff
 /.dry-run-results
-/.env
 /__pycache__
+
+# Environment variables
+/.env

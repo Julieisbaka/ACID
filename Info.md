@@ -59,5 +59,36 @@ When building the repository, the automated agent should structure the code into
 
 * `generator.py`: Handles noise corpus fetching, cleaning (stripping trailing questions), and token-budgeted file compilation.
 * `harness.py`: Asynchronous execution engine that manages API calls (via OpenAI/OpenRouter compatible endpoints), handles prompt caching strategies, and loops through baseline and tiered noise payloads.
-* `metrics.py`: Computes the conservation ratios, slices data by domain metadata tags (`ACID-Math`, `ACID-Code`, etc.), and extracts ACID80/ACID90 thresholds.
-* `dataset_schema.json`: Standardized JSON schema ensuring every test item includes a unique ID, domain tag, problem statement, and evaluation criteria/answer key.
+* `metrics.py`: Computes the conservation ratios, slices data by domain tags (`ACID-Math`, `ACID-Code`, etc.), and extracts ACID80/ACID90 thresholds.
+* `dataset_schema.json`: Standardized JSON schema ensuring every test item includes a unique ID, domain tag, question, and answer.
+
+## 6. Running the Harness
+
+### Question files
+
+Place one or more JSON files in `questions/`. The harness loads every `.json` file in that folder. Each item has this shape:
+
+```json
+{
+ "id": "unique-item-id",
+ "domain": "ACID-Math",
+ "question": "The task shown to the benchmarked model.",
+ "answer": 42
+}
+```
+
+The active fields are `id`, `domain`, `question`, and `answer`. An optional `difficulty` field is reserved for future benchmark changes but is currently ignored. The benchmarked model receives only `question` after the static noise prefix. The scoring model receives `question`, `domain`, `answer`, and the benchmarked model response. It never receives the noise prefix.
+
+### Adding models
+
+Add benchmark models to `models.json` or pass model IDs with `--models`. Each registry entry can select its own OpenAI-compatible `base_url` and API-key environment variable. ACID defaults to the single `gpt-4o-mini` judge with standardized `acid-judge-v1` instructions, temperature `0`, and a 256-token response cap. Keep that default unchanged for academically comparable results. The optional `--scoring-model` flag is intended only for explicitly non-comparable experiments.
+
+### Dry run
+
+Use `--dry-run` to exercise question loading, tier iteration, result generation, and metrics without constructing or calling any AI-provider client:
+
+```text
+python harness.py --dry-run
+```
+
+Use `--tiers 8000,32000` to limit a development run. Real runs require generated files under `noise_cache/` and API credentials defined by the model registry.

@@ -10,7 +10,7 @@ import re
 import statistics
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, cast
 
 NOISE_TIERS = (8_000, 32_000, 128_000, 512_000)
 DOMAIN_TAGS = ("ACID-Math", "ACID-Chem", "ACID-Bio", "ACID-Code")
@@ -38,9 +38,10 @@ def score_response(response: str, evaluation: Mapping[str, Any]) -> float:
     case_sensitive = bool(evaluation.get("case_sensitive", False))
 
     if kind == "any_of":
-        alternatives = evaluation.get("alternatives", [])
-        if not isinstance(alternatives, list) or not alternatives:
+        raw_alternatives = evaluation.get("alternatives", [])
+        if not isinstance(raw_alternatives, list) or not raw_alternatives:
             raise ValueError("any_of evaluation requires a non-empty alternatives list")
+        alternatives = cast(list[Mapping[str, Any]], raw_alternatives)
         return max(
             score_response(response, alternative) for alternative in alternatives
         )
@@ -57,7 +58,7 @@ def score_response(response: str, evaluation: Mapping[str, Any]) -> float:
 
     if kind == "contains":
         haystack = candidate if case_sensitive else candidate.casefold()
-        answers = expected if isinstance(expected, list) else [expected]
+        answers = cast(list[Any], expected) if isinstance(expected, list) else [expected]
         needles = [
             str(value) if case_sensitive else str(value).casefold() for value in answers
         ]
@@ -270,7 +271,7 @@ def main() -> None:
     args = parser.parse_args()
 
     payload = json.loads(args.input.read_text(encoding="utf-8"))
-    records = payload["records"] if isinstance(payload, dict) else payload
+    records = cast(list[dict[str, Any]], payload["records"] if isinstance(payload, dict) else payload)
     calculated = calculate_metrics(records)
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(calculated, indent=2), encoding="utf-8")

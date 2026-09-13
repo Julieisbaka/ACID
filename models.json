@@ -8,7 +8,7 @@
       "app_title": "ACID Benchmark"
     }
   ],
-  "scoring_model": {
+      "id": "gpt-4o-mini",
     "id": "YOUR-SCORING-MODEL-ID",
     "base_url": null,
     "api_key_env": "OPENAI_API_KEY",
