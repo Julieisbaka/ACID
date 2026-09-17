@@ -16,6 +16,13 @@ NOISE_TIERS = (8_000, 32_000, 128_000, 512_000)
 DOMAIN_TAGS = ("ACID-Math", "ACID-Chem", "ACID-Bio", "ACID-Code")
 
 
+def _load_json(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in {path}: {exc}") from exc
+
+
 def _normalise(value: str, *, case_sensitive: bool = False) -> str:
     value = re.sub(r"\s+", " ", value.strip())
     return value if case_sensitive else value.casefold()
@@ -123,6 +130,7 @@ def calculate_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     Ratios are null when that baseline is zero; those observations are excluded from
     ratio means while their scores remain present in mean-score calculations.
     """
+    records = [dict(row) for row in records]
     baselines: dict[tuple[str, str, str, str, int], float] = {}
     for row in records:
         effort = str(row.get("reasoning_effort") or "unset")
@@ -309,7 +317,7 @@ def main() -> None:
     parser.add_argument("--output-csv", type=Path, default=Path("results/summary.csv"))
     args = parser.parse_args()
 
-    payload = json.loads(args.input.read_text(encoding="utf-8"))
+    payload = _load_json(args.input)
     records = cast(list[dict[str, Any]], payload["records"] if isinstance(payload, dict) else payload)
     calculated = calculate_metrics(records)
     args.output_json.parent.mkdir(parents=True, exist_ok=True)

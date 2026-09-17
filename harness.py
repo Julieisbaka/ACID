@@ -12,6 +12,7 @@ import re
 import time
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
+from itertools import islice
 from pathlib import Path
 from typing import Any, Mapping, Sequence, cast
 
@@ -106,8 +107,15 @@ def load_dotenv(path: Path = Path(".env")) -> None:
         os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
 
 
+def _load_json(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in {path}: {exc}") from exc
+
+
 def _read_question_file(path: Path) -> list[dict[str, Any]]:
-    payload: Any = json.loads(path.read_text(encoding="utf-8"))
+    payload: Any = _load_json(path)
     raw_items: list[Any]
     if isinstance(payload, list):
         raw_items = cast(list[Any], payload)
@@ -156,6 +164,10 @@ def validate_dataset(items: Any) -> None:
             raise ValueError(f"Unknown domain on {item_id}: {item['domain']}")
         if not isinstance(item["question"], str) or not item["question"].strip():
             raise ValueError(f"Empty question on {item_id}")
+        if item.get("answer") is None:
+            raise ValueError(f"Empty answer on {item_id}")
+
+
 def _spec_from_json(raw: str | Mapping[str, Any]) -> ModelSpec:
     if isinstance(raw, str):
         provider, separator, model = raw.partition("/")
@@ -166,7 +178,7 @@ def _spec_from_json(raw: str | Mapping[str, Any]) -> ModelSpec:
 def _load_registry(path: Path) -> tuple[dict[str, ModelSpec], ModelSpec | None]:
     if not path.exists():
         return {}, None
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = _load_json(path)
     models = {_spec_from_json(raw).key: _spec_from_json(raw) for raw in payload.get("models", [])}
     scoring = payload.get("scoring_model")
     return models, (_spec_from_json(scoring) if scoring is not None else None)
@@ -212,7 +224,7 @@ def load_scoring_spec(
 
 def load_noise(noise_dir: Path, requested_tiers: Sequence[int] | None) -> tuple[dict[int, str], str]:
     manifest_path = noise_dir / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest = _load_json(manifest_path)
     encoding_name = str(manifest["encoding"])
     encoding = tiktoken.get_encoding(encoding_name)
     available = {int(tier): details for tier, details in manifest["tiers"].items()}
@@ -270,6 +282,13 @@ def parse_judge_response(response: str) -> tuple[float, str | None]:
     return score, str(rationale) if rationale is not None else None
 
 
+def _redact_error_message(message: str) -> str:
+    redacted = re.sub(r"\bsk-[A-Za-z0-9_-]+\b", "[REDACTED_API_KEY]", message)
+    redacted = re.sub(r"([?&](?:api_?key|key|token|authorization)=)[^&\s]+", r"\1[REDACTED]", redacted, flags=re.I)
+    redacted = re.sub(r"\bBearer\s+[A-Za-z0-9._-]+\b", "******", redacted, flags=re.I)
+    return redacted
+
+
 class AcidRunner:
     def __init__(self, model_clients: Mapping[str, AsyncOpenAI], models: Sequence[ModelSpec], scoring_client: AsyncOpenAI | None,
                  scoring_model: ModelSpec, items: Sequence[Mapping[str, Any]], noise_blocks: Mapping[int, str], config: RunConfig) -> None:
@@ -311,6 +330,8 @@ class AcidRunner:
                 if reasoning_effort is not None:
                     request_options["reasoning_effort"] = reasoning_effort
                 response = cast(ChatCompletion, await client.chat.completions.create(**request_options))
+                if not response.choices:
+                    raise ValueError("Model returned no choices")
                 usage: dict[str, Any] = (
                     response.usage.model_dump()
                     if response.usage
@@ -374,14 +395,21 @@ class AcidRunner:
                 })
             except Exception as exc:
                 record["attempts"] = self.config.retries + 1
-                record["error"] = f"{type(exc).__name__}: {exc}"
+                record["error"] = f"{type(exc).__name__}: {_redact_error_message(str(exc))[:500]}"
         return record
 
     async def run(self) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
+        batch_size = max(self.config.concurrency * 4, 1)
         for tier in sorted(self.noise_blocks):
-            tasks = [self._run_one(model, item, tier, trial) for model in self.models for item in self.items for trial in range(1, self.config.trials + 1)]
-            records.extend(await asyncio.gather(*tasks))
+            coroutines = (
+                self._run_one(model, item, tier, trial)
+                for model in self.models
+                for item in self.items
+                for trial in range(1, self.config.trials + 1)
+            )
+            while batch := list(islice(coroutines, batch_size)):
+                records.extend(await asyncio.gather(*batch))
         return records
 
 

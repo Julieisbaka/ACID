@@ -20,6 +20,7 @@ DEFAULT_TIERS = (8_000, 32_000, 128_000, 512_000)
 WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
 USER_AGENT = "ACID-Benchmark/1.0 (research evaluation corpus generator)"
 NEUTRAL_PADDING = " Historical context and descriptive background are provided for reference."
+MAX_EMPTY_WIKIPEDIA_BATCHES = 5
 
 
 @dataclass(frozen=True)
@@ -67,7 +68,10 @@ def _fetch_random_batch(batch_size: int, timeout: float) -> list[Article]:
         headers={"User-Agent": USER_AGENT},
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        payload = json.load(response)
+        try:
+            payload = json.load(response)
+        except json.JSONDecodeError as exc:
+            raise ValueError("Wikipedia API returned invalid JSON") from exc
     articles: list[Article] = []
     for page in payload.get("query", {}).get("pages", []):
         cleaned = clean_article_tail(page.get("extract", ""))
@@ -91,8 +95,15 @@ def wikipedia_articles(seed: int, timeout: float = 30.0) -> Iterator[Article]:
     """
     rng = random.Random(seed)
     seen: set[str] = set()
+    empty_batches = 0
     while True:
         batch = _fetch_random_batch(20, timeout)
+        if not batch:
+            empty_batches += 1
+            if empty_batches >= MAX_EMPTY_WIKIPEDIA_BATCHES:
+                raise RuntimeError("Wikipedia corpus fetch returned no usable articles repeatedly")
+            continue
+        empty_batches = 0
         rng.shuffle(batch)
         for article in batch:
             if article.page_id not in seen:
@@ -120,7 +131,10 @@ def local_articles(source_dir: Path, seed: int) -> Iterator[Article]:
 def _load_cached_sources(path: Path) -> list[Article]:
     if not path.exists():
         return []
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in source cache {path}: {exc}") from exc
     return [Article(**row) for row in payload]
 
 
