@@ -164,7 +164,9 @@ def validate_dataset(items: Any) -> None:
             raise ValueError(f"Unknown domain on {item_id}: {item['domain']}")
         if not isinstance(item["question"], str) or not item["question"].strip():
             raise ValueError(f"Empty question on {item_id}")
-        if item.get("answer") is None:
+        if "answer" not in item or item["answer"] is None:
+            raise ValueError(f"Empty answer on {item_id}")
+        if isinstance(item["answer"], str) and not item["answer"].strip():
             raise ValueError(f"Empty answer on {item_id}")
 
 
@@ -285,7 +287,7 @@ def parse_judge_response(response: str) -> tuple[float, str | None]:
 def _redact_error_message(message: str) -> str:
     redacted = re.sub(r"\bsk-[A-Za-z0-9_-]+\b", "[REDACTED_API_KEY]", message)
     redacted = re.sub(r"([?&](?:api_?key|key|token|authorization)=)[^&\s]+", r"\1[REDACTED]", redacted, flags=re.I)
-    redacted = re.sub(r"\bBearer\s+[A-Za-z0-9._-]+\b", "******", redacted, flags=re.I)
+    redacted = re.sub(r"\b(Bearer\s+)[^\s,;]+\b", r"\1[REDACTED]", redacted, flags=re.I)
     return redacted
 
 

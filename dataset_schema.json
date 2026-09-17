@@ -43,9 +43,24 @@
           "minLength": 1
         },
         "answer": {
-          "not": {
-            "type": "null"
-          }
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "array"
+            },
+            {
+              "type": "object"
+            }
+          ]
         }
       }
     }
