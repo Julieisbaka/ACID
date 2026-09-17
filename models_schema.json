@@ -2,7 +2,7 @@
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "https://acid-benchmark.org/schemas/models-v1.json",
     "title": "ACID Model Registry",
-    "description": "Provider/model configuration for benchmark models and the standardized judge. Credentials are never stored in this document.",
+    "description": "Provider/model configuration for benchmark models and the standardized judge.",
     "type": "object",
     "required": [
         "models",
