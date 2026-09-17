@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import math
 import os
 import random
 import re
@@ -166,8 +167,39 @@ def validate_dataset(items: Any) -> None:
             raise ValueError(f"Empty question on {item_id}")
         if "answer" not in item or item["answer"] is None:
             raise ValueError(f"Empty answer on {item_id}")
-        if isinstance(item["answer"], str) and not item["answer"].strip():
-            raise ValueError(f"Empty answer on {item_id}")
+        _validate_answer_value(item["answer"], item_id)
+
+
+def _validate_answer_value(value: Any, item_id: str, path: str = "answer") -> None:
+    if isinstance(value, str):
+        if not value.strip():
+            raise ValueError(f"Empty {path} on {item_id}")
+        return
+    if isinstance(value, bool):
+        return
+    if isinstance(value, (int, float)):
+        if not math.isfinite(value):
+            raise ValueError(f"Non-finite {path} on {item_id}")
+        return
+    if isinstance(value, list):
+        if not value:
+            raise ValueError(f"Empty {path} on {item_id}")
+        for index, entry in enumerate(value):
+            if entry is None:
+                raise ValueError(f"Null {path}[{index}] on {item_id}")
+            _validate_answer_value(entry, item_id, f"{path}[{index}]")
+        return
+    if isinstance(value, dict):
+        if not value:
+            raise ValueError(f"Empty {path} on {item_id}")
+        for key, entry in value.items():
+            if not isinstance(key, str) or not key:
+                raise ValueError(f"Invalid key in {path} on {item_id}")
+            if entry is None:
+                raise ValueError(f"Null {path}.{key} on {item_id}")
+            _validate_answer_value(entry, item_id, f"{path}.{key}")
+        return
+    raise ValueError(f"Unsupported {path} type on {item_id}: {type(value).__name__}")
 
 
 def _spec_from_json(raw: str | Mapping[str, Any]) -> ModelSpec:
