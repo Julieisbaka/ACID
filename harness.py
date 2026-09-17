@@ -94,6 +94,14 @@ class RunConfig:
     retries: int
     dry_run: bool = False
 
+    def __post_init__(self) -> None:
+        if self.trials < 1:
+            raise ValueError("trials must be positive")
+        if self.concurrency < 1:
+            raise ValueError("concurrency must be positive")
+        if self.retries < 0:
+            raise ValueError("retries cannot be negative")
+
 
 def load_dotenv(path: Path = Path(".env")) -> None:
     if not path.exists():
