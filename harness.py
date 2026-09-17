@@ -12,7 +12,6 @@ import re
 import time
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
-from itertools import islice
 from pathlib import Path
 from typing import Any, Mapping, Sequence, cast
 
@@ -436,16 +435,27 @@ class AcidRunner:
 
     async def run(self) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
-        batch_size = max(self.config.concurrency * 4, 1)
         for tier in sorted(self.noise_blocks):
-            coroutines = (
-                self._run_one(model, item, tier, trial)
-                for model in self.models
-                for item in self.items
-                for trial in range(1, self.config.trials + 1)
-            )
-            while batch := list(islice(coroutines, batch_size)):
-                records.extend(await asyncio.gather(*batch))
+            pending: set[asyncio.Task[dict[str, Any]]] = set()
+            for model in self.models:
+                for item in self.items:
+                    for trial in range(1, self.config.trials + 1):
+                        pending.add(
+                            asyncio.create_task(self._run_one(model, item, tier, trial))
+                        )
+                        if len(pending) < self.config.concurrency:
+                            continue
+                        done, pending = await asyncio.wait(
+                            pending,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        records.extend(task.result() for task in done)
+            while pending:
+                done, pending = await asyncio.wait(
+                    pending,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                records.extend(task.result() for task in done)
         return records
 
 
