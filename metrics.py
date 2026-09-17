@@ -18,7 +18,12 @@ DOMAIN_TAGS = ("ACID-Math", "ACID-Chem", "ACID-Bio", "ACID-Code")
 
 def _load_json(path: Path) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(
+            path.read_text(encoding="utf-8"),
+            parse_constant=lambda value: (_ for _ in ()).throw(
+                ValueError(f"Invalid JSON constant in {path}: {value}")
+            ),
+        )
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON in {path}: {exc}") from exc
 

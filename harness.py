@@ -6,7 +6,6 @@ import argparse
 import asyncio
 import hashlib
 import json
-import math
 import os
 import random
 import re
@@ -110,7 +109,12 @@ def load_dotenv(path: Path = Path(".env")) -> None:
 
 def _load_json(path: Path) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(
+            path.read_text(encoding="utf-8"),
+            parse_constant=lambda value: (_ for _ in ()).throw(
+                ValueError(f"Invalid JSON constant in {path}: {value}")
+            ),
+        )
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON in {path}: {exc}") from exc
 
@@ -178,8 +182,6 @@ def _validate_answer_value(value: Any, item_id: str, path: str = "answer") -> No
     if isinstance(value, bool):
         return
     if isinstance(value, (int, float)):
-        if not math.isfinite(value):
-            raise ValueError(f"Non-finite {path} on {item_id}")
         return
     if isinstance(value, list):
         if not value:

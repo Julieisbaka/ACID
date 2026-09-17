@@ -132,7 +132,12 @@ def _load_cached_sources(path: Path) -> list[Article]:
     if not path.exists():
         return []
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(
+            path.read_text(encoding="utf-8"),
+            parse_constant=lambda value: (_ for _ in ()).throw(
+                ValueError(f"Invalid JSON constant in source cache {path}: {value}")
+            ),
+        )
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON in source cache {path}: {exc}") from exc
     return [Article(**row) for row in payload]
