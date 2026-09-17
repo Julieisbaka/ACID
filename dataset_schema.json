@@ -66,16 +66,6 @@
           "items": {
             "$ref": "#/$defs/answer"
           }
-        },
-        {
-          "type": "object",
-          "minProperties": 1,
-          "propertyNames": {
-            "minLength": 1
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/answer"
-          }
         }
       ]
     }

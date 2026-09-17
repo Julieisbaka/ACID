@@ -198,16 +198,6 @@ def _validate_answer_value(value: Any, item_id: str, path: str = "answer") -> No
                 raise ValueError(f"Null {path}[{index}] on {item_id}")
             _validate_answer_value(entry, item_id, f"{path}[{index}]")
         return
-    if isinstance(value, dict):
-        if not value:
-            raise ValueError(f"Empty {path} on {item_id}")
-        for key, entry in value.items():
-            if not isinstance(key, str) or not key:
-                raise ValueError(f"Invalid key in {path} on {item_id}")
-            if entry is None:
-                raise ValueError(f"Null {path}.{key} on {item_id}")
-            _validate_answer_value(entry, item_id, f"{path}.{key}")
-        return
     raise ValueError(f"Unsupported {path} type on {item_id}: {type(value).__name__}")
 
 
