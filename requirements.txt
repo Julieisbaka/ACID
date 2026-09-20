@@ -1,2 +1,2 @@
-openai>=1.40,<3
+openai>=3.14.1,<4
 tiktoken>=0.7,<1
