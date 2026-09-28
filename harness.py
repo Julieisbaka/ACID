@@ -105,7 +105,7 @@ def load_dotenv(path: Path = Path(".env")) -> None:
     if normalized_path.exists():
         checked_path = normalized_path.resolve(strict=True)
     else:
-        checked_path = normalized_path.parent.resolve(strict=True) / normalized_path.name
+        checked_path = normalized_path
 
     try:
         checked_path.relative_to(workspace_root)
