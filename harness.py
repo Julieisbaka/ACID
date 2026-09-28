@@ -96,12 +96,20 @@ class RunConfig:
 
 
 def load_dotenv(path: Path = Path(".env")) -> None:
-    workspace_root = Path.cwd().resolve()
-    env_path = path.expanduser().resolve(strict=False)
+    workspace_root = Path.cwd().resolve(strict=True)
+    requested_path = path.expanduser()
+    env_path = requested_path.resolve(strict=False)
+
+    if env_path.exists():
+        checked_path = env_path.resolve(strict=True)
+    else:
+        checked_path = env_path.parent.resolve(strict=True) / env_path.name
+
     try:
-        env_path.relative_to(workspace_root)
+        checked_path.relative_to(workspace_root)
     except ValueError as exc:
         raise ValueError(f"env-file must be within {workspace_root}") from exc
+
     if not env_path.exists():
         return
     for raw_line in env_path.read_text(encoding="utf-8").splitlines():
