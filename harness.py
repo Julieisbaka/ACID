@@ -95,22 +95,21 @@ class RunConfig:
     dry_run: bool = False
 
 
+def _is_within_directory(base: Path, candidate: Path) -> bool:
+    base_resolved = base.resolve(strict=False)
+    candidate_resolved = candidate.resolve(strict=False)
+    return candidate_resolved == base_resolved or base_resolved in candidate_resolved.parents
+
+
 def load_dotenv(path: Path = Path(".env")) -> None:
     workspace_root = Path.cwd().resolve(strict=True)
     requested_path = path.expanduser()
     if not requested_path.is_absolute():
         requested_path = workspace_root / requested_path
 
-    normalized_path = requested_path.resolve(strict=False)
-    if normalized_path.exists():
-        checked_path = normalized_path.resolve(strict=True)
-    else:
-        checked_path = normalized_path
-
-    try:
-        checked_path.relative_to(workspace_root)
-    except ValueError as exc:
-        raise ValueError(f"env-file must be within {workspace_root}") from exc
+    checked_path = requested_path.resolve(strict=False)
+    if not _is_within_directory(workspace_root, checked_path):
+        raise ValueError(f"env-file must be within {workspace_root}")
 
     if not checked_path.exists():
         return
